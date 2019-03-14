@@ -2,27 +2,30 @@ package cn.edu.scu.notifyme;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.webkit.ConsoleMessage;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
-import com.blankj.utilcode.util.JsonUtils;
 import com.blankj.utilcode.util.LogUtils;
 import com.google.gson.Gson;
 
 import org.greenrobot.eventbus.EventBus;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.List;
 import java.util.concurrent.BlockingDeque;
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingDeque;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 
+import androidx.annotation.RequiresApi;
 import cn.edu.scu.notifyme.event.EventID;
 import cn.edu.scu.notifyme.event.MessageEvent;
 import cn.edu.scu.notifyme.model.Message;
@@ -37,14 +40,21 @@ import cn.edu.scu.notifyme.model.TaskResult;
  */
 public class BackgroundWorker {
     private static BackgroundWorker instance;
+
     public static synchronized BackgroundWorker getInstance() {
         if (instance == null) {
-            instance  = new BackgroundWorker();
+            instance = new BackgroundWorker();
         }
         return instance;
     }
-    private BackgroundWorker() {}
 
+    private BackgroundWorker() {
+    }
+
+
+    public WebView getWebview() {
+        return webview;
+    }
 
     private WebView webview;
     private JSInterface jsInterface;
@@ -54,9 +64,24 @@ public class BackgroundWorker {
     private Semaphore webviewSemaphore;
     private boolean isThreadStopping = false;
 
-    private static long TIMEOUT = 20000;
+    private static long TIMEOUT = 10000;
     private Handler timeoutHandler = new Handler();
     private Runnable timeoutTask;
+
+    private WebChromeClient defaultWebChromeClient = new WebChromeClient();
+    private WebChromeClient handleConsoleMessageWebChromeClient =
+            new HandleConsoleMessageWebChromeClient();
+
+    private boolean imageShown = false;
+
+    public boolean isImageShown() {
+        return imageShown;
+    }
+
+    public void setImageShown(boolean imageShown) {
+        this.imageShown = imageShown;
+        webview.getSettings().setLoadsImagesAutomatically(imageShown);
+    }
 
     public void bind(Context context) {
         if (this.webview != null) {
@@ -65,9 +90,11 @@ public class BackgroundWorker {
         }
         this.webview = new WebView(context);
         webview.getSettings().setJavaScriptEnabled(true);
-        webview.getSettings().setLoadsImagesAutomatically(false);
+        setImageShown(false);
         jsInterface = new JSInterface();
         webview.addJavascriptInterface(jsInterface, "App");
+        webview.setWebViewClient(new OverrideUrlLoadingWebViewClient());
+        webview.setWebChromeClient(defaultWebChromeClient);
     }
 
     private class JSInterface {
@@ -79,42 +106,58 @@ public class BackgroundWorker {
 
         @JavascriptInterface
         public void Return(String result) {
-            LogUtils.d(currentRule.getToLoadUrl() + " JS executed");
+            LogUtils.d(currentRule.getToLoadUrl() + " script executed");
+            LogSystem.getInstance().d(currentRule.getToLoadUrl() + " script executed");
             if (!result.startsWith("{")) {
-                if (webviewSemaphore != null) webviewSemaphore.release();
+                LogSystem.getInstance().d("but result is not a JS object. Ignore");
+                releaseCurrentTask();
                 return;
             }
             if (BackgroundWorker.this.isThreadStopping) {
-                if (webviewSemaphore != null) webviewSemaphore.release();
+                releaseCurrentTask();
                 return;
             }
 
             TaskResult taskResult = new Gson().fromJson(result, TaskResult.class);
+            List<TaskResult.MessagesBean> messagesBeans = taskResult.getMessages();
 
             if (taskResult.getIconUrl() != null) {
                 currentRule.setIconUrl(taskResult.getIconUrl());
             }
 
-            Message msg = new Message();
-            msg.setUpdateTime(new Date());
-            msg.setTitle(taskResult.getTitle().trim());
-            msg.setContent(taskResult.getContent().trim());
-            msg.setImgUrl(taskResult.getImgUrl());
-            msg.setTargetUrl(taskResult.getTargetUrl());
-            msg.setRule(currentRule);
-            EventBus.getDefault().post(
-                    new MessageEvent(EventID.EVENT_HAS_FETCHED_RESULT, msg));
+            List<Message> messages = new ArrayList<>();
+            for (TaskResult.MessagesBean messagesBean : messagesBeans) {
+                Message msg = new Message();
+                msg.setUpdateTime(new Date());
+                msg.setTitle(messagesBean.getTitle().trim());
+                msg.setContent(messagesBean.getContent().trim());
+                msg.setImgUrl(messagesBean.getImgUrl());
+                msg.setTargetUrl(messagesBean.getTargetUrl());
+                msg.setRule(currentRule);
+                messages.add(msg);
+            }
 
-            timeoutHandler.removeCallbacks(timeoutTask);
-            if (webviewSemaphore != null) webviewSemaphore.release();
+            EventBus.getDefault().post(
+                    new MessageEvent(EventID.EVENT_HAS_FETCHED_RESULT, messages));
+
+            releaseCurrentTask();
         }
+    }
+
+    private void resetWebChromeClient() {
+        LogUtils.d("Resetting web Chrome client...");
+        webview.post(() -> {
+            webview.setWebChromeClient(defaultWebChromeClient);
+        });
     }
 
     public void newTask(Rule rule) {
         this.toProcessRules.addLast(rule);
     }
 
-    public void insertTask(Rule rule) { this.toProcessRules.addFirst(rule); }
+    public void insertTask(Rule rule) {
+        this.toProcessRules.addFirst(rule);
+    }
 
     public void stop() {
         isThreadStopping = true;
@@ -123,6 +166,7 @@ public class BackgroundWorker {
         toProcessRules.clear();
         webviewSemaphore.release();
         webviewSemaphore = null;
+        LogSystem.getInstance().d("Background worker stopped");
     }
 
     public void start() {
@@ -132,12 +176,14 @@ public class BackgroundWorker {
         webviewSemaphore = new Semaphore(1);
         workerThread = new Thread(() -> {
             LogUtils.d("Now in worker thread...");
+            LogSystem.getInstance().d("Background worker started");
             while (!isThreadStopping) {
                 try {
                     Rule aRule = toProcessRules.takeFirst();
-                    LogUtils.d("Take a new task");
+                    LogUtils.d("Take a new task: " + aRule.getName());
                     webviewSemaphore.acquire();
                     LogUtils.d("WebView semaphore acquired");
+                    LogSystem.getInstance().d("Take a new task: " + aRule.getName());
                     new Handler(Looper.getMainLooper()).post(() -> {
                         this.process(aRule);
                     });
@@ -150,7 +196,7 @@ public class BackgroundWorker {
     }
 
     private void process(Rule rule) {
-        webview.setWebViewClient(new WebViewClient() {
+        webview.setWebViewClient(new OverrideUrlLoadingWebViewClient() {
             @Override
             public void onPageStarted(WebView view, String url, Bitmap favicon) {
                 super.onPageStarted(view, url, favicon);
@@ -163,17 +209,12 @@ public class BackgroundWorker {
                     new Handler(Looper.getMainLooper()).post(() -> {
                         BackgroundWorker.this.webview.stopLoading();
                         LogUtils.w("Timeout loading " + rule.getToLoadUrl());
+                        LogSystem.getInstance().d("Timeout loading " + rule.getToLoadUrl());
 
-                        //TODO: 按照规范构造消息对象
-                        Message msg = new Message();
-                        msg.setUpdateTime(new Date());
-                        msg.setTitle(rule.getName());
-                        msg.setContent("");
-                        msg.setRule(rule);
                         EventBus.getDefault().post(
-                                new MessageEvent(EventID.EVENT_FETCH_TIMEOUT, msg));
+                                new MessageEvent(EventID.EVENT_FETCH_TIMEOUT, null));
 
-                        if (webviewSemaphore != null) webviewSemaphore.release();
+                        releaseCurrentTask();
                     });
                 };
                 timeoutHandler.postDelayed(timeoutTask, TIMEOUT);
@@ -182,6 +223,15 @@ public class BackgroundWorker {
             @Override
             public void onPageFinished(WebView view, String url) {
                 LogUtils.d(rule.getToLoadUrl() + " loaded");
+                LogSystem.getInstance().d(rule.getToLoadUrl() + " loaded");
+
+                if (timeoutTask == null) {
+                    LogUtils.d("But this task has been canceled. Abort");
+                    return;
+                }
+
+                LogUtils.d("Mounting web Chrome client to handle console messages...");
+                webview.setWebChromeClient(handleConsoleMessageWebChromeClient);
 
                 jsInterface.setRule(rule);
                 webview.loadUrl("javascript:" + rule.getScript());
@@ -189,5 +239,65 @@ public class BackgroundWorker {
         });
         webview.loadUrl(rule.getToLoadUrl());
         LogUtils.d("Loading " + rule.getToLoadUrl() + " ...");
+        LogSystem.getInstance().d("Loading " + rule.getToLoadUrl() + " ...");
+    }
+
+    private class OverrideUrlLoadingWebViewClient extends WebViewClient {
+        @SuppressWarnings("deprecation")
+        @Override
+        public boolean shouldOverrideUrlLoading(WebView view, String url) {
+            checkPatternAndSendToInternalBrowser(url);
+            return false;
+        }
+
+        @RequiresApi(Build.VERSION_CODES.N)
+        @Override
+        public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+            String url = request.getUrl().toString();
+            checkPatternAndSendToInternalBrowser(url);
+            return false;
+        }
+
+        private void checkPatternAndSendToInternalBrowser(String url) {
+            if (url.startsWith("http://") || url.startsWith("https://")) {
+                Message msg = new Message();
+                msg.setTargetUrl(url);
+                EventBus.getDefault().post(new MessageEvent(EventID.EVENT_WEBVIEW_URL_CHANGED,
+                        Collections.singletonList(msg)));
+            }
+        }
+    }
+
+    private class HandleConsoleMessageWebChromeClient extends WebChromeClient {
+        @Override
+        public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
+            if (consoleMessage.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                LogUtils.e(consoleMessage.message());
+                LogSystem.getInstance().d(
+                        "ERROR executing script: " + consoleMessage.message());
+                Message msg = new Message();
+                msg.setContent(consoleMessage.message());
+                EventBus.getDefault().post(new MessageEvent(EventID.EVENT_JS_ERROR,
+                        Collections.singletonList(msg)));
+
+                releaseCurrentTask();
+            }
+            return true;
+        }
+    }
+
+    public void cancelCurrentTask() {
+        LogUtils.d("Stop loading");
+        webview.post(() -> {
+            webview.stopLoading();
+        });
+        releaseCurrentTask();
+    }
+
+    private void releaseCurrentTask() {
+        resetWebChromeClient();
+        timeoutHandler.removeCallbacks(timeoutTask);
+        timeoutTask = null;
+        if (webviewSemaphore != null) webviewSemaphore.release();
     }
 }

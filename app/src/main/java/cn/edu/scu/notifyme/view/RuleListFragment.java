@@ -24,9 +24,11 @@ import androidx.recyclerview.widget.RecyclerView;
 import butterknife.BindView;
 import butterknife.ButterKnife;
 import butterknife.Unbinder;
+import cn.edu.scu.notifyme.App;
 import cn.edu.scu.notifyme.CreateOrEditTaskActivity;
 import cn.edu.scu.notifyme.DatabaseManager;
 import cn.edu.scu.notifyme.R;
+import cn.edu.scu.notifyme.RuleMessageList;
 import cn.edu.scu.notifyme.adapter.RulesAdapter;
 import cn.edu.scu.notifyme.event.EventID;
 import cn.edu.scu.notifyme.event.MessageEvent;
@@ -66,7 +68,7 @@ public class RuleListFragment extends Fragment {
         this.category = DatabaseManager.getInstance().getCategoryById(
                 this.getArguments().getLong(PARAM_CATEGORY_ID)
         );
-        this.rules = category.getRule();
+        this.rules = category.getRules();
 
         this.adapter = new RulesAdapter(
                 R.layout.item_rule_card,
@@ -93,6 +95,15 @@ public class RuleListFragment extends Fragment {
                     }
                     theRule.setActive(!theRule.isActive());
                     DatabaseManager.getInstance().updateRule(category, theRule);
+                    this.rules = DatabaseManager.getInstance()
+                            .getCategoryById(this.category.getId()).getRules();
+                    this.adapter.setItems(this.rules);
+                    this.adapter.notifyDataSetChanged();
+                    break;
+                case R.id.layout_rule_card:
+                    Intent intent = new Intent(getActivity(), RuleMessageList.class);
+                    intent.putExtra("ruleId", theRule.getId());
+                    startActivity(intent);
                     break;
             }
         });
@@ -101,7 +112,12 @@ public class RuleListFragment extends Fragment {
         rvRules.setAdapter(adapter);
 
         uiUpdateNoCardHint();
-        
+        if (App.isTasksRunning()) {
+            uiSetModifications(false);
+        } else {
+            uiSetModifications(true);
+        }
+
         return view;
     }
 
@@ -112,15 +128,30 @@ public class RuleListFragment extends Fragment {
                 this.category = DatabaseManager.getInstance().getCategoryById(
                         this.getArguments().getLong(PARAM_CATEGORY_ID)
                 );
-                this.adapter.setItems(this.category.getRule());
+                this.adapter.setItems(this.category.getRules());
                 this.adapter.notifyDataSetChanged();
                 uiUpdateNoCardHint();
+                break;
+            case EventID.EVENT_TASKS_STARTED:
+                uiSetModifications(false);
+                break;
+            case EventID.EVENT_TASKS_STOPED:
+                uiSetModifications(true);
                 break;
         }
     }
 
+    private void uiSetModifications(boolean on) {
+        if (on) {
+            this.adapter.setButtonsEnable(true);
+        } else {
+            this.adapter.setButtonsEnable(false);
+        }
+        this.adapter.notifyDataSetChanged();
+    }
+
     private void uiUpdateNoCardHint() {
-        if (this.category.getRule().size() > 0) {
+        if (this.category.getRules().size() > 0) {
             noCardHint.setVisibility(View.INVISIBLE);
         } else {
             noCardHint.setVisibility(View.VISIBLE);
