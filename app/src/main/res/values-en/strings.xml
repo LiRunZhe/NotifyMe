@@ -49,6 +49,7 @@
     <string name="clear_all">Clear All Messages</string>
     <string name="amount_of_messages">Amount</string>
     <string name="internal_browser">Internal Browser</string>
+    <string name="manuals">manuals</string>
     <string name="address">Address</string>
     <string name="are_you_sure_to_clear_all_messages">Are you sure to clear all messages</string>
     <string name="script_error">Script Error</string>
@@ -77,4 +78,6 @@
     <string name="backup_failed">Backup failed</string>
     <string name="restore_succeed">Restore succeed</string>
     <string name="restore_failed">Restore failed</string>
+    <string name="sign_in_failed">Sign in failed</string>
+    <string name="sign_up_failed">Sign up failed, possibly duplicate phone number</string>
 </resources>

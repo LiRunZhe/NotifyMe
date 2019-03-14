@@ -20,7 +20,9 @@ import butterknife.BindView;
 import butterknife.ButterKnife;
 import butterknife.OnClick;
 import butterknife.Unbinder;
+import cn.edu.scu.notifyme.AccountUtils;
 import cn.edu.scu.notifyme.LogsActivity;
+import cn.edu.scu.notifyme.ManualsActivity;
 import cn.edu.scu.notifyme.R;
 import cn.edu.scu.notifyme.SettingsActivity;
 import cn.edu.scu.notifyme.SignInSignUpActivity;
@@ -41,6 +43,8 @@ public class MeFragment extends Fragment {
     LinearLayout slliSettings;
     @BindView(R.id.slli_internal_browser)
     SingleLineListItem slliInternalBrowser;
+    @BindView(R.id.slli_manuals)
+    SingleLineListItem slliManuals;
 
     @Nullable
     @Override
@@ -49,14 +53,26 @@ public class MeFragment extends Fragment {
         unbinder = ButterKnife.bind(this, view);
 
         uiRefreshUserInfo();
+        slliSettings.setOnClickListener(v -> {
+            Intent intent = new Intent(getActivity(), SettingsActivity.class);
+            startActivity(intent);
+        });
+        slliInternalBrowser.setOnClickListener(v -> {
+            Intent intent = new Intent(getActivity(), WebViewActivity.class);
+            startActivity(intent);
+        });
+        slliManuals.setOnClickListener(view1 -> {
+            Intent intent = new Intent(getActivity(), ManualsActivity.class);
+            startActivity(intent);
+        });
 
         return view;
     }
 
     private void uiRefreshUserInfo() {
-        String username = SPUtils.getInstance().getString("username");
-        if (!username.isEmpty()) {
-            tvUsername.setText(username);
+        Long account = AccountUtils.getAccount();
+        if (AccountUtils.hasSignedIn()) {
+            tvUsername.setText(Long.toString(account));
         }
         String avatarUrl = SPUtils.getInstance().getString("avatarUrl");
         if (!avatarUrl.isEmpty()) {
@@ -72,10 +88,6 @@ public class MeFragment extends Fragment {
         }
     }
 
-    private boolean isUserSignedIn() {
-        return !SPUtils.getInstance().getString("username").isEmpty();
-    }
-
     @Override
     public void onDestroyView() {
         super.onDestroyView();
@@ -86,7 +98,7 @@ public class MeFragment extends Fragment {
     public void onViewClicked(View view) {
         switch (view.getId()) {
             case R.id.iv_avatar: {
-                if (!isUserSignedIn()) {
+                if (!AccountUtils.hasSignedIn()) {
                     Intent intent = new Intent(getActivity(), SignInSignUpActivity.class);
                     startActivityForResult(intent, REQUEST_SIGN_IN_RESULT);
                 }
